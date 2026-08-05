@@ -38,21 +38,33 @@ nail_proportion_by_session <- nail_collection %>%
 
 print(nail_proportion_by_session)
 
-# Aggregate sessions: a participant has fingernails collected if this
-# occurred in at least one session
+# Aggregate sessions, distinguishing participants with fingernails, only
+# toenails, or no collected nail sample
 finger_collection_by_participant <- nail_collection %>%
   group_by(participant_id) %>%
   summarise(
-    finger_collection = if_else(
-      any(nail_category == "fingernails", na.rm = TRUE),
-      "has finger nails collected",
-      "has no finger nails collected"
+    nail_collection_group = case_when(
+      any(nail_category == "fingernails", na.rm = TRUE) ~
+        "has finger nails collected",
+      any(nail_category == "toenails", na.rm = TRUE) ~
+        "only toe nails collected",
+      TRUE ~ "missing nails"
     ),
     .groups = "drop"
+  ) %>%
+  mutate(
+    nail_collection_group = factor(
+      nail_collection_group,
+      levels = c(
+        "has finger nails collected",
+        "only toe nails collected",
+        "missing nails"
+      )
+    )
   )
 
 finger_collection_proportion <- finger_collection_by_participant %>%
-  count(finger_collection, name = "n") %>%
+  count(nail_collection_group, .drop = FALSE, name = "n") %>%
   mutate(proportion = n / sum(n))
 
 print(finger_collection_proportion)
