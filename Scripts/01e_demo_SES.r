@@ -61,16 +61,31 @@ demo_ses_variables <- c(
   "sed_basic_demographics_recruitment_site"
 )
 
-# Reduce V01 and V02 to one record per participant. V01 is checked first, then
-# V02; the first non-missing value is retained for each variable independently.
+# Reduce V01 and V02 to one record per participant. V02 is checked first, then
+# V01; the first non-missing value is retained for each variable independently.
 demo_ses_table <- df %>%
   arrange(
     participant_id,
-    match(session_id, c("ses-V01", "ses-V02"))
+    match(session_id, c("ses-V02", "ses-V01"))
   ) %>%
   group_by(participant_id) %>%
   summarise(
-    across(all_of(demo_ses_variables), first_non_missing),
+    across(
+      all_of(demo_ses_variables),
+      ~ {
+        variable <- cur_column()
+        if (variable %in% c(
+          "sed_basic_demographics_sex",
+          "sed_basic_demographics_child_ethnicity"
+        )) {
+          first_preferred_value(.x, values_to_deprioritize = 2)
+        } else if (variable == "sed_basic_demographics_child_race") {
+          first_preferred_value(.x, values_to_deprioritize = 7)
+        } else {
+          first_non_missing(.x)
+        }
+      }
+    ),
     .groups = "drop"
   )
 

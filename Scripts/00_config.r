@@ -3,6 +3,7 @@
 # ------------------------------------------------------------------------------
 rawdata_dir <- "R:/brisk/HBCD/UntouchedData"
 preprocessed_dir <- "R:/brisk/HBCD/PreprocessedData"
+eda_output_dir <- file.path(getwd(), "Outputs", "EDA")
 
 
 # ------------------------------------------------------------------------------

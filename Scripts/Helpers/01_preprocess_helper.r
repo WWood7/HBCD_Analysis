@@ -24,6 +24,22 @@ first_non_missing <- function(x) {
   observed[[1]]
 }
 
+first_preferred_value <- function(x, values_to_deprioritize) {
+  observed <- x[!is_missing_value(x)]
+  if (length(observed) == 0) {
+    return(x[NA_integer_][1])
+  }
+
+  preferred <- observed[
+    !trimws(as.character(observed)) %in% as.character(values_to_deprioritize)
+  ]
+  if (length(preferred) > 0) {
+    return(preferred[[1]])
+  }
+
+  observed[[1]]
+}
+
 all_existing_are <- function(x, codes) {
   observed <- trimws(as.character(x[!is_missing_value(x)]))
   length(observed) > 0 && all(observed %in% as.character(codes))
