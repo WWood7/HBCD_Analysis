@@ -1,5 +1,5 @@
+# use only toxicological resutls for PCE definition
 # positive confirmatory test results for urine or nail samples
-# Self-report weekly use of cannabis for four weeks or more during pregnancy
 
 source("Scripts/00_config.r")
 source("Scripts/Helpers/01_preprocess_helper.r")
@@ -27,37 +27,14 @@ df <- biospecimens %>%
 
 # list all the needed variables for deriving beyond-threshold prenatal cannabis exposure
 tlfb_thc_variables <- sprintf("pex_ch_tlfb_thc_wk_%02d", 3:9)
-tlfb_cannabinoid_variables <- sprintf("pex_ch_tlfb_cbd_wk_%02d", 3:9)
-tlfb_cannibidiol_variables <- sprintf("pex_ch_tlfb_oth_cbd_wk_%02d", 3:9)
-tlfb_variables <- sprintf("tlfb_combined_wk_%02d", 3:9)
-# Add the cannabinoid and other-cannabinoid values within each week. If both
-# source values are missing, keep the combined value missing.
-for (i in seq_along(tlfb_variables)) {
-  cannabinoid_value <- suppressWarnings(as.numeric(
-    trimws(as.character(df[[tlfb_cannabinoid_variables[[i]]]]))
-  ))
-  other_cannabinoid_value <- suppressWarnings(as.numeric(
-    trimws(as.character(df[[tlfb_cannibidiol_variables[[i]]]]))
-  ))
-  thc_value <- suppressWarnings(as.numeric(
-    trimws(as.character(df[[tlfb_thc_variables[[i]]]]))
-  ))
-  combined_value <- rowSums(
-    cbind(cannabinoid_value, other_cannabinoid_value, thc_value),
-    na.rm = TRUE
-  )
-  combined_value[is.na(cannabinoid_value) & is.na(other_cannabinoid_value)] <-
-    NA_real_
-  df[[tlfb_variables[[i]]]] <- combined_value
-}
 # nail_thc_variable <-
 #   "bio_bm_biosample_nails_results_c_delta-9-THC_n_cat"
 # urine_thc_variable <-
 #   "bio_bm_biosample_urine_results_bio_c_delta-9-THC_u_cat"
 nail_thc_variable <-
-  "bio_bm_biosample_nails_results_c_any_cannabinoid_n"
+  "bio_bm_biosample_nails_results_c_delta-9-THC_n_cat"
 urine_thc_variable <-
-  "bio_bm_biosample_urine_results_bio_c_any_cannabinoid_u"
+  "bio_bm_biosample_urine_results_bio_c_delta-9-THC_u_cat"
 
 assist_v1_variable <- "pex_bm_assistv1_during__use_003"
 assist_v2_variable <- "pex_bm_assistv2_end__use_003"
@@ -114,7 +91,12 @@ pce_components <- df %>%
         "partial negative",
         "unclassifiable"
       )
-    )
+    ),
+    pce_tox = case_when(
+        nail_positive | urine_positive ~ 1L,
+        (nail_negative | urine_negative) & !nail_positive & !urine_positive ~ 0L,
+        TRUE ~ NA_integer_
+      )
   ) %>%
   select(-all_of(tlfb_variables))
 
@@ -125,13 +107,14 @@ pce_components <- df %>%
 # all other participants will be recorded as 0
 pce_table <- pce_components %>%
   mutate(
-    prenatal_cannabis = case_when(
-      pce == 4 ~ NA_integer_,
-      pce == 1 ~ 1L,
-      TRUE ~ 0L
+    prenatal_cannabis = pce,
+    prenatal_cannabis_tox = case_when(
+      pce_tox == 1 ~ 1L,
+      pce_tox == 0 ~ 0L,
+      TRUE ~ NA_integer_
     )
   ) %>%
-  select(participant_id, prenatal_cannabis)
+  select(participant_id, prenatal_cannabis, prenatal_cannabis_tox)
 
 # write the output to a csv file
 write.csv(pce_table, file.path(preprocessed_dir, "prenatal_cannabis.csv"), row.names = FALSE)

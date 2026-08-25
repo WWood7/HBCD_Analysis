@@ -19,10 +19,15 @@ pregnancyandexposures <- read.csv(
   file.path(rawdata_dir, "PregnancyAndExposures.csv"),
   check.names = FALSE
 )
+SES <- read.csv(
+  file.path(rawdata_dir, "SocialEnvironmentalDeterminants.csv"),
+  check.names = FALSE
+)
+
 df <- demographics %>%
   full_join(physicalhealth, by = c("participant_id", "session_id")) %>%
   full_join(pregnancyandexposures, by = c("participant_id", "session_id")) %>%
-  filter(session_id %in% c("ses-V01", "ses-V02"))
+  full_join(SES, by = c("participant_id", "session_id"))
 
 
 
@@ -43,22 +48,41 @@ df <- demographics %>%
 # household income: sed_basic_demographics_rc_mother_income
 # mother education: sed_basic_demographics_rc_mother_education
 # recruitment site: sed_basic_demographics_recruitment_site
+# mother race: sed_basic_demographics_screen_mother_race
+# mother ethnicity: sed_basic_demographics_screen_mother_ethnicity
+# mother age at delivery: sed_basic_demographics_mother_age_delivery
 # prenatal other stimulant exposre:
-# employment:
-# food insecurity:
+# mother employment: sed_bm_demo_work_001
+# food insecurity: sed_cg_foodins_category
+# work during pregnancy: sed_cg_employ_001
 # insurance type:
 # ------------------------------------------------------------------------------
 
-# Variables with names specified above.
+# ------------------------------------------------------------------------------
+# Placental Pathology Proxies
+# hypertension: pex_bm_healthv2_preg__compl_001___2
+# preeclampsia: pex_bm_healthv2_preg__compl_001___3
+# oligohydramnios: pex_bm_healthv2_preg__compl_001___9
+# ------------------------------------------------------------------------------
+
 demo_ses_variables <- c(
-  "sed_basic_demographics_gestational_age_delivery",
-  "pex_bm_healthv2_inf_001__02",
-  "sed_basic_demographics_sex",
-  "sed_basic_demographics_child_ethnicity",
-  "sed_basic_demographics_child_race",
-  "sed_basic_demographics_rc_mother_income",
-  "sed_basic_demographics_rc_mother_education",
-  "sed_basic_demographics_recruitment_site"
+  "sed_basic_demographics_gestational_age_delivery", # gestational age at birth (weeks)
+  "pex_bm_healthv2_inf_001__02", # weight at birth (pounds)
+  "sed_basic_demographics_sex", # sex (0: female, 1: male, 2: unknown)
+  "sed_basic_demographics_child_ethnicity", # child ethnicity
+  "sed_basic_demographics_child_race", # child race
+  "sed_basic_demographics_rc_mother_income", # household income
+  "sed_basic_demographics_rc_mother_education", # mother education
+  "sed_basic_demographics_recruitment_site", # recruitment site
+  "sed_basic_demographics_screen_mother_race", # mother race
+  "sed_basic_demographics_screen_mother_ethnicity", # mother ethnicity
+  "sed_basic_demographics_mother_age_delivery", # mother age at delivery (years)
+  "sed_cg_employ_001", # work during pregnancy
+  "sed_cg_foodins_category", # food insecurity
+  "sed_bm_demo_work_001", # mother employment
+  "pex_bm_healthv2_preg__compl_001___2", # hypertension
+  "pex_bm_healthv2_preg__compl_001___3", # preeclampsia
+  "pex_bm_healthv2_preg__compl_001___9" # oligohydramnios
 )
 
 # Reduce V01 and V02 to one record per participant. V02 is checked first, then
@@ -66,7 +90,7 @@ demo_ses_variables <- c(
 demo_ses_table <- df %>%
   arrange(
     participant_id,
-    match(session_id, c("ses-V02", "ses-V01"))
+    match(session_id, c("ses-V02", "ses-V01", "ses-V03", "ses-V04", "ses-V05"))
   ) %>%
   group_by(participant_id) %>%
   summarise(

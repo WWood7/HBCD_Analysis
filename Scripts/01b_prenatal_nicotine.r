@@ -40,7 +40,7 @@ assist_v2_variable <- "pex_bm_assistv2_end__use_001"
 pne_components <- df %>%
   group_by(participant_id) %>%
   summarise(
-    across(all_of(tlfb_variables), has_positive_count),
+    across(all_of(tlfb_variables), max_reported_count),
     nail_positive = has_code(.data[[nail_nicotine_variable]], 1),
     urine_positive = has_code(.data[[urine_nicotine_variable]], 1),
     nail_negative = all_existing_are(.data[[nail_nicotine_variable]], c(0, 4)),
@@ -66,7 +66,14 @@ pne_components <- df %>%
     .groups = "drop"
   ) %>%
   mutate(
-    tlfb_weeks_used = rowSums(across(all_of(tlfb_variables))),
+    tlfb_weeks_used = rowSums(
+      across(all_of(tlfb_variables), ~ .x > 0),
+      na.rm = TRUE
+    ),
+    prenatal_nicotine_freq = rowSums(
+      across(all_of(tlfb_variables)),
+      na.rm = TRUE
+    ),
     prenatal_nicotine = case_when(
       tlfb_weeks_used >= 4 | nail_positive | urine_positive ~ 1L,
       assist_v1_unclassifiable & assist_v2_unclassifiable &
@@ -78,7 +85,11 @@ pne_components <- df %>%
 
   # now create a new table with just the PNE variable
   pne_table <- pne_components %>%
-    select(participant_id, prenatal_nicotine)
+    select(
+      participant_id,
+      prenatal_nicotine,
+      prenatal_nicotine_freq
+    )
 
   # write the output to a csv file
   write.csv(pne_table, file.path(preprocessed_dir, "prenatal_nicotine.csv"), row.names = FALSE)

@@ -37,7 +37,7 @@ df <- biospecimens %>%
 
 # list all the needed variables for deriving beyond-threshold prenatal cannabis exposure
 tlfb_variables <- sprintf("pex_ch_tlfb_alc_wk_%02d", 3:9)
-tlfb_flag_variable <- "pex_ch_tlfb_self_report_alcohol"
+
 nail_alcohol_variable <-
   "bio_bm_biosample_nails_results_c_ethanol_n"
 urine_alcohol_variable <-
@@ -46,6 +46,7 @@ infant_fas_variable <-
   "pex_bm_healthv2_inf_007___5"
 assist_v1_variable <- "pex_bm_assistv1_during__use_002"
 assist_v2_variable <- "pex_bm_assistv2_end__use_002"
+tlfb_flag_variable <- "pex_ch_tlfb_self_report_alcohol"
 
 
 # Reduce all sessions to one row per participant. Each TLFB week is counted
@@ -53,10 +54,7 @@ assist_v2_variable <- "pex_bm_assistv2_end__use_002"
 pae_components <- df %>%
   group_by(participant_id) %>%
   summarise(
-    across(
-      all_of(tlfb_variables),
-      ~ has_count_at_least(.x, threshold = 7)
-    ),
+    across(all_of(tlfb_variables), max_reported_count),
     infant_positive = has_code(.data[[infant_fas_variable]], 1),
     tlfb_flag_positive = has_code(.data[[tlfb_flag_variable]], 1),
     nail_positive = has_code(.data[[nail_alcohol_variable]], 1),
@@ -81,7 +79,14 @@ pae_components <- df %>%
     .groups = "drop"
   ) %>%
   mutate(
-    tlfb_weeks_used = rowSums(across(all_of(tlfb_variables))),
+    tlfb_weeks_used = rowSums(
+      across(all_of(tlfb_variables), ~ .x >= 7),
+      na.rm = TRUE
+    ),
+    prenatal_alcohol_freq = rowSums(
+      across(all_of(tlfb_variables)),
+      na.rm = TRUE
+    ),
     prenatal_alcohol = case_when(
       tlfb_flag_positive | nail_positive | urine_positive | infant_positive ~ 1L,
       assist_v1_unclassifiable & assist_v2_unclassifiable &
@@ -93,7 +98,11 @@ pae_components <- df %>%
 
   # now create a new table with just the PAE variable
   pae_table <- pae_components %>%
-    select(participant_id, prenatal_alcohol)
+    select(
+      participant_id,
+      prenatal_alcohol,
+      prenatal_alcohol_freq
+    )
 
   # write the output to a csv file
   write.csv(pae_table, file.path(preprocessed_dir, "prenatal_alcohol.csv"), row.names = FALSE)

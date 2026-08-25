@@ -84,3 +84,9 @@ apply_variable_spec <- function(data, spec) {
 
   data
 }
+
+
+max_reported_count <- function(x) {
+  values <- suppressWarnings(as.numeric(trimws(as.character(x))))
+  if (all(is.na(values))) NA_real_ else max(values, na.rm = TRUE)
+}

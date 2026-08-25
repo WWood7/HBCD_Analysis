@@ -2,8 +2,8 @@
 Y_vars <- c("birth_weight_lbs")
 A_var <- "prenatal_cannabis"
 M_vars <- c("gestational_age")
-X_vars <- c("prenatal_alcohol", "prenatal_nicotine", "prenatal_opioid", "child_race", "child_ethnicity",
-            "mother_education", "household_income", "site")
+X_vars <- c("prenatal_alcohol", "prenatal_nicotine", "prenatal_opioid",
+            "mother_education", "household_income", "site", "mother_race", "mother_ethnicity", "mother_age_delivery")
 
 
 ##### preprocess the dataset to enable sl3 compatibility:
@@ -24,7 +24,7 @@ preprocess_data <- function(
     stop("Missing required variables: ", paste(missing_vars, collapse = ", "))
   }
 
-  # This analysis uses the complete-case population selected by the user.
+  # This analysis uses the complete-case population
   out <- data[stats::complete.cases(data[, required_vars, drop = FALSE]), , drop = FALSE]
   if (!nrow(out)) {
     stop("No complete cases remain after filtering the required variables.")
@@ -281,10 +281,9 @@ estimate_causal_estimands <- function(data, X_vars, M_vars, Y_vars, A_var, learn
   assert_oof_predictions(shared_nuisance)
 
   # truncate the ps's to avoid numerical instability
-  bound <- 0.025
+  bound <- 0.01
   data$ps <- pmax(pmin(data$ps, 1 - bound), bound)
   data$ps_m <- pmax(pmin(data$ps_m, 1 - bound), bound)
-
   data$dens_ratio <- (1 - data$ps_m) / data$ps_m * data$ps / (1 - data$ps)
 
 
@@ -402,13 +401,11 @@ estimate_causal_estimands <- function(data, X_vars, M_vars, Y_vars, A_var, learn
         (data[[A_var]] == 0) / (1 - data$ps) * data[[paste0(yv, "_or_1")]]
       )
       data[[paste0(yv, "_D_0_0")]] <- (data[[A_var]] == 0) / (1 - data$ps) *
-        (data[[yv]] - data[[paste0(yv, "_or_0")]]) +
-        (data[[A_var]] == 0) / (1 - data$ps) * (data[[paste0(yv, "_or_0")]] - data[[paste0(yv, "_sr_0_0")]]) +
+        (data[[yv]] - data[[paste0(yv, "_sr_0_0")]]) +
         data[[paste0(yv, "_sr_0_0")]] - theta_0_0
 
       data[[paste0(yv, "_D_1_1")]] <- (data[[A_var]] == 1) / data$ps *
-        (data[[yv]] - data[[paste0(yv, "_or_1")]]) +
-        (data[[A_var]] == 1) / data$ps * (data[[paste0(yv, "_or_1")]] - data[[paste0(yv, "_sr_1_1")]]) +
+        (data[[yv]] - data[[paste0(yv, "_sr_1_1")]]) +
         data[[paste0(yv, "_sr_1_1")]] - theta_1_1
 
       data[[paste0(yv, "_D_1_0")]] <- (data[[A_var]] == 1) / data$ps *

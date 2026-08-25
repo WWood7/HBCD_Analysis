@@ -52,5 +52,57 @@ demo_ses_spec <- list(
   sed_basic_demographics_recruitment_site = list(
     new_name = "site",
     type = "factor"
+  ),
+  sed_basic_demographics_screen_mother_race = list(
+    new_name = "mother_race",
+    type = "factor",
+    levels = c(0, 1, 2, 3, 4, 5, 6, 7),
+    labels = c("American Indian/Alaska Native", "Asian", "White", "Black", "American Indian/Alaska Native", "Two or More Races", "Two or More Races", "Other")
+  ),
+  sed_basic_demographics_screen_mother_ethnicity = list(
+    new_name = "mother_ethnicity",
+    type = "factor",
+    levels = c(0, 1),
+    labels = c("Hispanic", "Non-Hispanic")
+  ),
+  sed_basic_demographics_mother_age_delivery = list(
+    new_name = "mother_age_delivery",
+    type = "numeric"
+  ),
+  sed_cg_employ_001 = list(
+    new_name = "work_during_pregnancy",
+    type = "factor",
+    levels = c(0, 1, 999, 777),
+    labels = c("No", "Yes", "Don't know/Refused", "Don't know/Refused")
+  ),
+  sed_cg_foodins_category = list(
+    new_name = "food_insecurity",
+    type = "factor",
+    levels = c("", "Positive"),
+    labels = c("Negative", "Positive")
+  ),
+  sed_bm_demo_work_001 = list(
+    new_name = "mother_employment",
+    type = "factor",
+    levels = c(0, 1, 999, 777),
+    labels = c("Unemployed", "Employed", "Don't know/Refused", "Don't know/Refused")
+  ),
+  pex_bm_healthv2_preg__compl_001___2 = list(
+    new_name = "hypertension",
+    type = "factor",
+    levels = c(0, 1),
+    labels = c("No", "Yes")
+  ),
+  pex_bm_healthv2_preg__compl_001___3 = list(
+    new_name = "preeclampsia",
+    type = "factor",
+    levels = c(0, 1),
+    labels = c("No", "Yes")
+  ),
+  pex_bm_healthv2_preg__compl_001___9 = list(
+    new_name = "oligohydramnios",
+    type = "factor",
+    levels = c(0, 1),
+    labels = c("No", "Yes")
   )
 )

@@ -45,7 +45,10 @@ create_pce_table1 <- function(data) {
         mother_education ~ "Mother education",
         prenatal_nicotine ~ "Prenatal nicotine exposure",
         prenatal_opioid ~ "Prenatal opioid exposure",
-        prenatal_alcohol ~ "Prenatal alcohol exposure"
+        prenatal_alcohol ~ "Prenatal alcohol exposure",
+        mother_race ~ "Mother race",
+        mother_ethnicity ~ "Mother ethnicity",
+        mother_age_delivery ~ "Mother age at delivery"
       )
     ) %>%
     gtsummary::add_overall(
@@ -64,11 +67,12 @@ create_pce_table1 <- function(data) {
           child_ethnicity,
           household_income,
           mother_education,
+          mother_ethnicity,
           prenatal_nicotine,
           prenatal_opioid,
           prenatal_alcohol
         ) ~ list(workspace = 2e6),
-        child_race ~ list(simulate.p.value = TRUE, B = 100000)
+        c(child_race, mother_race) ~ list(simulate.p.value = TRUE, B = 100000)
       )
     ) %>%
     gtsummary::bold_p(t = 0.05) %>%
