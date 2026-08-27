@@ -77,7 +77,6 @@ demo_ses_variables <- c(
   "sed_basic_demographics_screen_mother_race", # mother race
   "sed_basic_demographics_screen_mother_ethnicity", # mother ethnicity
   "sed_basic_demographics_mother_age_delivery", # mother age at delivery (years)
-  "sed_cg_employ_001", # work during pregnancy
   "sed_cg_foodins_category", # food insecurity
   "sed_bm_demo_work_001", # mother employment
   "pex_bm_healthv2_preg__compl_001___2", # hypertension

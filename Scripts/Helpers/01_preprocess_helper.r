@@ -57,6 +57,11 @@ apply_variable_spec <- function(data, spec) {
     new_name <- settings$new_name
     x <- data[[source_name]]
 
+    if (!is.null(settings$missing_label)) {
+      x <- as.character(x)
+      x[is_missing_value(x)] <- settings$missing_label
+    }
+
     x <- switch(
       settings$type,
       numeric = suppressWarnings(as.numeric(as.character(x))),

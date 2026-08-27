@@ -1,34 +1,41 @@
-# Variables for the HBCD birthweight mediation analysis
-Y_vars <- c("birth_weight_lbs")
-A_var <- "prenatal_cannabis"
-M_vars <- c("gestational_age")
-X_vars <- c("prenatal_alcohol", "prenatal_nicotine", "prenatal_opioid",
-            "mother_education", "household_income", "site", "mother_race", "mother_ethnicity", "mother_age_delivery")
-
-
 ##### preprocess the dataset to enable sl3 compatibility:
-## drop rows with NA in X/A/M/Y
+## drop rows with NA in X/A/M/Delta_Y; retain missing Y only when requested
 ## add Y_sq to the dataset
 ## one-hot encode X and M
 preprocess_data <- function(
     data,
-    y_vars = Y_vars,
-    a_var = A_var,
-    x_vars = X_vars,
-    m_vars = M_vars
+    y_vars,
+    a_var,
+    x_vars,
+    m_vars,
+    delta_y_var,
+    flag_missingness = FALSE
 ) {
+  if (length(flag_missingness) != 1L || is.na(flag_missingness) ||
+      !is.logical(flag_missingness)) {
+    stop("flag_missingness must be TRUE or FALSE.")
+  }
   
-  required_vars <- unique(c(a_var, x_vars, m_vars, y_vars))
-  missing_vars <- setdiff(required_vars, names(data))
-  if (length(missing_vars)) {
-    stop("Missing required variables: ", paste(missing_vars, collapse = ", "))
+  # check if all required variables are present in the data
+  required_observed <- unique(c(a_var, x_vars, m_vars, delta_y_var))
+  if (!flag_missingness) {
+    required_observed <- unique(c(required_observed, y_vars))
   }
-
-  # This analysis uses the complete-case population
-  out <- data[stats::complete.cases(data[, required_vars, drop = FALSE]), , drop = FALSE]
-  if (!nrow(out)) {
-    stop("No complete cases remain after filtering the required variables.")
+  keep_vars <- unique(c(required_observed, y_vars))
+  missing_req <- setdiff(keep_vars, names(data))
+  if (length(missing_req)) stop("Missing columns: ", paste(missing_req, collapse = ", "))
+  
+  # Keep binary-treatment rows with observed A/X/M/missingness indicator.
+  # Missing outcomes are retained only for missingness-adjusted estimation.
+  out <- data %>%
+    dplyr::filter(.data[[a_var]] %in% c(0, 1)) %>%
+    dplyr::select(dplyr::all_of(keep_vars))
+  if (!flag_missingness) {
+    out <- dplyr::filter(out, .data[[delta_y_var]] == 1)
   }
+  ok <- stats::complete.cases(out[, required_observed, drop = FALSE])
+  out <- out[ok, , drop = FALSE]
+  if (!nrow(out)) stop("No eligible rows remain after preprocessing.")
 
   sanitize_sl3_col <- function(x) {
     if (inherits(x, "labelled")) x <- as.numeric(x)
@@ -39,19 +46,48 @@ preprocess_data <- function(
     x
   }
 
-  for (v in required_vars) {
+  for (v in keep_vars) {
     out[[v]] <- sanitize_sl3_col(out[[v]])
   }
-  for (v in c(m_vars, y_vars)) {
-    if (!is.numeric(out[[v]])) {
-      stop(v, " must be numeric.")
-    }
-    # sl3 treats integer-valued outcomes as categorical unless converted.
-    out[[v]] <- as.numeric(out[[v]])
+
+  if (!identical(sort(unique(as.numeric(out[[a_var]]))), c(0, 1))) {
+    stop(a_var, " must contain both 0 and 1 after preprocessing.")
   }
-  
+  if (flag_missingness &&
+      !identical(sort(unique(as.numeric(out[[delta_y_var]]))), c(0, 1))) {
+    stop(delta_y_var, " must contain both 0 and 1 after preprocessing.")
+  }
+  if (!flag_missingness && any(out[[delta_y_var]] != 1)) {
+    stop(delta_y_var, " must equal 1 in the complete-case analysis.")
+  }
+
   for (yv in y_vars) {
-    out[[paste0(yv, "_sq")]] <- out[[yv]]^2
+    if (!is.numeric(out[[yv]])) stop(yv, " must be numeric.")
+    out[[yv]] <- as.numeric(out[[yv]])
+    if (any(out[[delta_y_var]] == 1 & is.na(out[[yv]]))) {
+      stop(yv, " is missing where ", delta_y_var, " equals 1.")
+    }
+    out[[paste0(yv, "_sq")]] <- ifelse(
+      out[[delta_y_var]] == 1,
+      out[[yv]]^2,
+      NA_real_
+    )
+  }
+
+  bad_x <- x_vars[!vapply(x_vars, function(v) {
+    x <- out[[v]]
+    !all(is.na(x)) && length(unique(x[!is.na(x)])) > 1
+  }, logical(1))]
+  if (length(bad_x) > 0) {
+    stop("These X variables are all-NA or constant after filtering: ", paste(bad_x, collapse = ", "))
+  }
+
+  bad_m <- m_vars[!vapply(m_vars, function(v) {
+    x <- out[[v]]
+    !all(is.na(x)) && length(unique(x[!is.na(x)])) > 1
+  }, logical(1))]
+  if (length(bad_m) > 0) {
+    stop("These M variables are all-NA or constant after filtering: ", paste(bad_m, collapse = ", "))
   }
 
   # one-hot encode X and M separately so their updated name vectors are explicit
@@ -84,36 +120,40 @@ preprocess_data <- function(
 
 
 # Run preprocessing and participant-level causal estimation.
-run_birthweight_pipeline <- function(
+run_mediation_pipeline <- function(
     df_input,
-    a_var = A_var,
-    x_vars = X_vars,
+    a_var,
+    x_vars,
+    m_vars,
+    y_vars,
+    delta_y_var,
     learners,
-    y_vars = Y_vars,
-    m_vars = M_vars,
-    num_outer_folds = 2L
+    num_outer_folds = 2L,
+    flag_missingness = FALSE
 ) {
   num_outer_folds <- as.integer(num_outer_folds)
+  if (length(num_outer_folds) != 1L || is.na(num_outer_folds) || num_outer_folds < 2L) {
+    stop("num_outer_folds must be one integer greater than or equal to 2.")
+  }
   prep <- preprocess_data(
     df_input,
     a_var = a_var,
     x_vars = x_vars,
+    m_vars = m_vars,
     y_vars = y_vars,
-    m_vars = m_vars
+    delta_y_var = delta_y_var,
+    flag_missingness = flag_missingness
   )
   df_model <- prep$data
   x_vars_num <- prep$X_vars
   m_vars_num <- prep$M_vars
 
-  treatment_values <- sort(unique(df_model[[a_var]]))
-  if (!identical(as.numeric(treatment_values), c(0, 1))) {
-    stop(a_var, " must contain exactly the values 0 and 1 after preprocessing.")
-  }
-
   folds <- create_participant_folds(
     data = df_model,
     num_folds = num_outer_folds,
-    a_var = a_var
+    a_var = a_var,
+    delta_y_var = delta_y_var,
+    flag_missingness = flag_missingness
   )
 
   results <- estimate_causal_estimands(
@@ -122,47 +162,59 @@ run_birthweight_pipeline <- function(
     M_vars = m_vars_num,
     Y_vars = y_vars,
     A_var = a_var,
+    Delta_Y_var = delta_y_var,
     learners = learners,
-    folds = folds
+    folds = folds,
+    flag_missingness = flag_missingness
   )
+
   dplyr::mutate(
     results,
     treatment = a_var,
     mediator = paste(m_vars, collapse = ", "),
-    n_complete = nrow(df_model),
-    n_excluded = nrow(df_input) - nrow(df_model),
-    num_outer_folds = num_outer_folds
+    outcome_observed_indicator = delta_y_var,
+    n_analysis = nrow(df_model),
+    n_outcome_observed = sum(df_model[[delta_y_var]] == 1),
+    n_outcome_missing = sum(df_model[[delta_y_var]] == 0),
+    num_outer_folds = num_outer_folds,
+    missingness_adjusted = flag_missingness
   )
 }
 
 
-##### Create treatment-balanced participant-level cross-fitting folds
+##### Create participant-level folds balanced by treatment and outcome observation.
 create_participant_folds <- function(
     data,
     num_folds = 2L,
-    a_var = A_var,
+    a_var,
+    delta_y_var,
+    flag_missingness = FALSE,
     seed = 123L
 ) {
-  if (!a_var %in% names(data)) {
-    stop("Treatment variable not found: ", a_var)
-  }
+  stopifnot(a_var %in% names(data), delta_y_var %in% names(data))
   num_folds <- as.integer(num_folds)
   if (length(num_folds) != 1L || is.na(num_folds) || num_folds < 2L) {
     stop("num_folds must be one integer greater than or equal to 2.")
   }
-  treatment_values <- sort(unique(data[[a_var]]))
-  if (!identical(as.numeric(treatment_values), c(0, 1))) {
-    stop(a_var, " must contain exactly the values 0 and 1.")
+  insufficient_support <- any(table(data[[a_var]]) < num_folds)
+  if (flag_missingness) {
+    insufficient_support <- insufficient_support ||
+      any(table(data[[delta_y_var]]) < num_folds) ||
+      any(table(data[[a_var]][data[[delta_y_var]] == 1]) < num_folds)
   }
-  treatment_counts <- table(data[[a_var]])
-  if (any(treatment_counts < num_folds)) {
-    stop("Each treatment group needs at least num_folds observations.")
+  if (insufficient_support) {
+    stop("Insufficient treatment or observed-outcome support for the requested folds.")
   }
 
   set.seed(seed)
+  strata <- if (flag_missingness) {
+    interaction(data[[a_var]], data[[delta_y_var]], drop = TRUE)
+  } else {
+    factor(data[[a_var]])
+  }
   row_fold <- integer(nrow(data))
-  for (a_level in treatment_values) {
-    indices <- which(data[[a_var]] == a_level)
+  for (stratum in levels(strata)) {
+    indices <- which(strata == stratum)
     indices <- sample(indices, length(indices), replace = FALSE)
     row_fold[indices] <- rep(seq_len(num_folds), length.out = length(indices))
   }
@@ -172,9 +224,6 @@ create_participant_folds <- function(
     training_set <- which(row_fold != fold_id)
     if (!length(training_set) || !length(validation_set)) {
       stop("An outer cross-fitting fold has an empty training or validation set.")
-    }
-    if (!all(c(0, 1) %in% unique(data[[a_var]][training_set]))) {
-      stop("An outer training fold does not contain both treatment levels.")
     }
     origami::make_fold(
       v = fold_id,
@@ -191,33 +240,34 @@ create_participant_folds <- function(
 }
 
 
-# IID variance of an asymptotically linear estimator
+# IID variance for the participant-level HBCD sample.
 calc_iid_var <- function(eif_vector) {
   ok <- is.finite(eif_vector)
   eif <- eif_vector[ok]
-  if (length(eif) < 2L) {
-    return(NA_real_)
-  }
+  if (length(eif) < 2L) return(NA_real_)
   stats::var(eif) / length(eif)
 }
 
 # define a function to estimate the causal estimands
-estimate_causal_estimands <- function(data, X_vars, M_vars, Y_vars, A_var, learners, folds) {
+estimate_causal_estimands <- function(data, X_vars, M_vars, Y_vars, A_var, Delta_Y_var, learners, folds, flag_missingness = FALSE) {
+  if (length(flag_missingness) != 1L || is.na(flag_missingness) ||
+      !is.logical(flag_missingness)) {
+    stop("flag_missingness must be TRUE or FALSE.")
+  }
   reg_lrnr <- learners$reg_lrnr
   cls_lrnr <- learners$cls_lrnr
+  missing_lrnr <- learners$missing_lrnr
+  if (is.null(missing_lrnr)) missing_lrnr <- sl3::Lrnr_glm$new()
   results <- data.frame()
 
-  make_inner_folds <- function(fold_data, max_folds = 5L) {
-    treatment_counts <- table(fold_data[[A_var]])
-    if (length(treatment_counts) != 2L || min(treatment_counts) < 2L) {
-      stop("Each outer training sample needs at least two observations per treatment level.")
+  if (!flag_missingness) {
+    incomplete_y <- vapply(Y_vars, function(y_var) anyNA(data[[y_var]]), logical(1))
+    if (any(data[[Delta_Y_var]] != 1) || any(incomplete_y)) {
+      stop(
+        "When flag_missingness is FALSE, data must contain only participants ",
+        "with observed outcomes. Use run_mediation_pipeline() to preprocess it."
+      )
     }
-    create_participant_folds(
-      data = fold_data,
-      num_folds = min(max_folds, min(treatment_counts)),
-      a_var = A_var,
-      seed = 123L
-    )
   }
 
   assert_binary_support <- function(x, label, fold_id) {
@@ -238,6 +288,12 @@ estimate_causal_estimands <- function(data, X_vars, M_vars, Y_vars, A_var, learn
   # Shared nuisance functions are fit on each outer training fold and evaluated
   # only on participants in the corresponding validation fold.
   shared_nuisance <- c("ps", "ps_m")
+  if (flag_missingness) {
+    shared_nuisance <- c(shared_nuisance, "missing_ps_0", "missing_ps_1")
+  } else {
+    data$missing_ps_0 <- 1
+    data$missing_ps_1 <- 1
+  }
   for (column_name in shared_nuisance) data[[column_name]] <- NA_real_
 
   for (fold_id in seq_along(folds)) {
@@ -251,25 +307,45 @@ estimate_causal_estimands <- function(data, X_vars, M_vars, Y_vars, A_var, learn
     valid_data_1[[A_var]] <- 1
 
     assert_binary_support(train_data[[A_var]], A_var, fold_id)
-    inner_folds <- make_inner_folds(train_data)
+    if (flag_missingness) {
+      assert_binary_support(train_data[[Delta_Y_var]], Delta_Y_var, fold_id)
+    }
 
     task_ps_train <- sl3::make_sl3_Task(
       data = train_data,
       outcome = A_var,
       outcome_type = "binomial",
-      covariates = X_vars,
-      folds = inner_folds
+      covariates = X_vars
     )
     ps_fit <- cls_lrnr$train(task_ps_train)
     task_ps_valid <- sl3::make_sl3_Task(data = valid_data, covariates = X_vars)
     data$ps[valid_idx] <- ps_fit$predict(task_ps_valid)
 
+    if (flag_missingness) {
+      task_missing_train <- sl3::make_sl3_Task(
+        data = train_data,
+        outcome = Delta_Y_var,
+        outcome_type = "binomial",
+        covariates = c(X_vars, M_vars, A_var)
+      )
+      missing_fit <- missing_lrnr$train(task_missing_train)
+      task_missing_valid_0 <- sl3::make_sl3_Task(
+        data = valid_data_0,
+        covariates = c(X_vars, M_vars, A_var)
+      )
+      task_missing_valid_1 <- sl3::make_sl3_Task(
+        data = valid_data_1,
+        covariates = c(X_vars, M_vars, A_var)
+      )
+      data$missing_ps_0[valid_idx] <- missing_fit$predict(task_missing_valid_0)
+      data$missing_ps_1[valid_idx] <- missing_fit$predict(task_missing_valid_1)
+    }
+
     task_ps_m_train <- sl3::make_sl3_Task(
       data = train_data,
       outcome = A_var,
       outcome_type = "binomial",
-      covariates = c(X_vars, M_vars),
-      folds = inner_folds
+      covariates = c(X_vars, M_vars)
     )
     ps_m_fit <- cls_lrnr$train(task_ps_m_train)
     task_ps_m_valid <- sl3::make_sl3_Task(
@@ -284,6 +360,11 @@ estimate_causal_estimands <- function(data, X_vars, M_vars, Y_vars, A_var, learn
   bound <- 0.01
   data$ps <- pmax(pmin(data$ps, 1 - bound), bound)
   data$ps_m <- pmax(pmin(data$ps_m, 1 - bound), bound)
+  if (flag_missingness) {
+    data$missing_ps_0 <- pmax(pmin(data$missing_ps_0, 1 - bound), bound)
+    data$missing_ps_1 <- pmax(pmin(data$missing_ps_1, 1 - bound), bound)
+  }
+
   data$dens_ratio <- (1 - data$ps_m) / data$ps_m * data$ps / (1 - data$ps)
 
 
@@ -303,7 +384,12 @@ estimate_causal_estimands <- function(data, X_vars, M_vars, Y_vars, A_var, learn
         valid_idx <- folds[[fold_id]]$validation_set
         train_data <- data[train_idx, , drop = FALSE]
         valid_data <- data[valid_idx, , drop = FALSE]
-        assert_binary_support(train_data[[A_var]], A_var, fold_id)
+        train_observed <- train_data[train_data[[Delta_Y_var]] == 1, , drop = FALSE]
+
+        if (!nrow(train_observed)) {
+          stop("Outer training fold ", fold_id, " has no observed outcomes for ", yv, ".")
+        }
+        assert_binary_support(train_observed[[A_var]], paste0(A_var, " among observed outcomes"), fold_id)
 
         train_data_0 <- train_data
         train_data_0[[A_var]] <- 0
@@ -314,13 +400,11 @@ estimate_causal_estimands <- function(data, X_vars, M_vars, Y_vars, A_var, learn
         valid_data_1 <- valid_data
         valid_data_1[[A_var]] <- 1
 
-        outcome_inner_folds <- make_inner_folds(train_data)
         task_outcome_train <- sl3::make_sl3_Task(
-          data = train_data,
+          data = train_observed,
           outcome = yv,
           outcome_type = "continuous",
-          covariates = c(X_vars, M_vars, A_var),
-          folds = outcome_inner_folds
+          covariates = c(X_vars, M_vars, A_var)
         )
         outcome_fit <- reg_lrnr$train(task_outcome_train)
 
@@ -346,28 +430,19 @@ estimate_causal_estimands <- function(data, X_vars, M_vars, Y_vars, A_var, learn
         data[[paste0(yv, "_or_0")]][valid_idx] <- outcome_fit$predict(task_outcome_valid_0)
         data[[paste0(yv, "_or_1")]][valid_idx] <- outcome_fit$predict(task_outcome_valid_1)
 
-        sequential_inner_folds <- make_inner_folds(train_data)
         task_sequential_1_0 <- sl3::make_sl3_Task(
           data = train_data,
           outcome = paste0(yv, "_or_1"),
           outcome_type = "continuous",
-          covariates = c(X_vars, A_var),
-          folds = sequential_inner_folds
+          covariates = c(X_vars, A_var)
         )
         task_sequential_0_0 <- sl3::make_sl3_Task(
           data = train_data,
           outcome = paste0(yv, "_or_0"),
           outcome_type = "continuous",
-          covariates = c(X_vars, A_var),
-          folds = sequential_inner_folds
+          covariates = c(X_vars, A_var)
         )
-        task_sequential_1_1 <- sl3::make_sl3_Task(
-          data = train_data,
-          outcome = paste0(yv, "_or_1"),
-          outcome_type = "continuous",
-          covariates = c(X_vars, A_var),
-          folds = sequential_inner_folds
-        )
+        task_sequential_1_1 <- task_sequential_1_0
 
         sequential_fit_1_0 <- reg_lrnr$train(task_sequential_1_0)
         sequential_fit_0_0 <- reg_lrnr$train(task_sequential_0_0)
@@ -400,16 +475,28 @@ estimate_causal_estimands <- function(data, X_vars, M_vars, Y_vars, A_var, learn
       theta_1_0 <- mean(
         (data[[A_var]] == 0) / (1 - data$ps) * data[[paste0(yv, "_or_1")]]
       )
-      data[[paste0(yv, "_D_0_0")]] <- (data[[A_var]] == 0) / (1 - data$ps) *
-        (data[[yv]] - data[[paste0(yv, "_sr_0_0")]]) +
+      observed_residual_0 <- ifelse(
+        data[[Delta_Y_var]] == 1,
+        data[[yv]] - data[[paste0(yv, "_or_0")]],
+        0
+      )
+      observed_residual_1 <- ifelse(
+        data[[Delta_Y_var]] == 1,
+        data[[yv]] - data[[paste0(yv, "_or_1")]],
+        0
+      )
+      data[[paste0(yv, "_D_0_0")]] <- (data[[A_var]] == 0) * data[[Delta_Y_var]] / (1 - data$ps) / data$missing_ps_0 *
+        observed_residual_0 +
+        (data[[A_var]] == 0) / (1 - data$ps) * (data[[paste0(yv, "_or_0")]] - data[[paste0(yv, "_sr_0_0")]]) +
         data[[paste0(yv, "_sr_0_0")]] - theta_0_0
 
-      data[[paste0(yv, "_D_1_1")]] <- (data[[A_var]] == 1) / data$ps *
-        (data[[yv]] - data[[paste0(yv, "_sr_1_1")]]) +
+      data[[paste0(yv, "_D_1_1")]] <- (data[[A_var]] == 1) * data[[Delta_Y_var]] / data$ps / data$missing_ps_1 *
+        observed_residual_1 +
+        (data[[A_var]] == 1) / data$ps * (data[[paste0(yv, "_or_1")]] - data[[paste0(yv, "_sr_1_1")]]) +
         data[[paste0(yv, "_sr_1_1")]] - theta_1_1
 
-      data[[paste0(yv, "_D_1_0")]] <- (data[[A_var]] == 1) / data$ps *
-        data$dens_ratio * (data[[yv]] - data[[paste0(yv, "_or_1")]]) +
+      data[[paste0(yv, "_D_1_0")]] <- (data[[A_var]] == 1) * data[[Delta_Y_var]] / data$ps / data$missing_ps_1 *
+        data$dens_ratio * observed_residual_1 +
         (data[[A_var]] == 0) / (1 - data$ps) * (data[[paste0(yv, "_or_1")]] - data[[paste0(yv, "_sr_1_0")]]) +
         data[[paste0(yv, "_sr_1_0")]] - theta_1_0
       
@@ -436,7 +523,6 @@ estimate_causal_estimands <- function(data, X_vars, M_vars, Y_vars, A_var, learn
     ate_es <- ate / sqrt(v_ate)
     nde_es <- nde / sqrt(v_ate)
     nie_es <- nie / sqrt(v_ate)
-    # IID influence-function variances for participant-level data.
     ate_var <- calc_iid_var(data[[paste0(v, "_D_1_1")]] - data[[paste0(v, "_D_0_0")]])
     nde_var <- calc_iid_var(data[[paste0(v, "_D_1_0")]] - data[[paste0(v, "_D_0_0")]])
     nie_var <- calc_iid_var(data[[paste0(v, "_D_1_1")]] - data[[paste0(v, "_D_1_0")]])

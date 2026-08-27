@@ -69,17 +69,12 @@ demo_ses_spec <- list(
     new_name = "mother_age_delivery",
     type = "numeric"
   ),
-  sed_cg_employ_001 = list(
-    new_name = "work_during_pregnancy",
-    type = "factor",
-    levels = c(0, 1, 999, 777),
-    labels = c("No", "Yes", "Don't know/Refused", "Don't know/Refused")
-  ),
   sed_cg_foodins_category = list(
     new_name = "food_insecurity",
     type = "factor",
-    levels = c("", "Positive"),
-    labels = c("Negative", "Positive")
+    levels = c("Negative", "Positive"),
+    labels = c("Negative", "Positive"),
+    missing_label = "Negative"
   ),
   sed_bm_demo_work_001 = list(
     new_name = "mother_employment",
