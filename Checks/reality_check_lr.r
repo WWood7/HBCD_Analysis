@@ -7,7 +7,7 @@ suppressPackageStartupMessages({
   library(gt)
 })
 
-set.seed(20260827)
+set.seed(20260830)
 
 outcome_var <- "birth_weight_lbs"
 treatment_definitions <- c(
@@ -16,8 +16,8 @@ treatment_definitions <- c(
 )
 
 prenatal_coexposures <- c(
-  "prenatal_nicotine_freq",
-  "prenatal_alcohol_freq"
+  "prenatal_nicotine",
+  "prenatal_alcohol"
 )
 baseline_demographics <- c(
   "mother_race",
@@ -38,8 +38,7 @@ pregnancy_conditions <- c(
   "oligohydramnios"
 )
 
-# The order is deliberate. The last two stages may change the estimand because
-# gestational age and pregnancy conditions may be post-exposure variables.
+# The order is deliberate. The last two stages may change the estimand
 adjustment_sets <- list(
   "PCE only" = character(0),
   "+ Prenatal co-exposures" = prenatal_coexposures,

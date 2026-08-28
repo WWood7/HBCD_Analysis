@@ -27,7 +27,26 @@ SES <- read.csv(
 df <- demographics %>%
   full_join(physicalhealth, by = c("participant_id", "session_id")) %>%
   full_join(pregnancyandexposures, by = c("participant_id", "session_id")) %>%
-  full_join(SES, by = c("participant_id", "session_id"))
+  full_join(SES, by = c("participant_id", "session_id")) %>%
+  mutate(
+    birth_weight_pounds_component = suppressWarnings(
+      as.numeric(as.character(.data[["pex_bm_healthv2_inf_001__02"]]))
+    ),
+    birth_weight_ounces_component = suppressWarnings(
+      as.numeric(as.character(.data[["pex_bm_healthv2_inf_001__01"]]))
+    ),
+    pex_bm_healthv2_inf_001__02 = case_when(
+      is.na(birth_weight_pounds_component) &
+        is.na(birth_weight_ounces_component) ~ NA_real_,
+      TRUE ~
+        coalesce(birth_weight_pounds_component, 0) +
+        coalesce(birth_weight_ounces_component, 0) / 16
+    )
+  ) %>%
+  select(
+    -birth_weight_pounds_component,
+    -birth_weight_ounces_component
+  )
 
 
 
@@ -36,7 +55,7 @@ df <- demographics %>%
 # ------------------------------------------------------------------------------
 # Child-related variables
 # gestational age at birth: sed_basic_demographics_gestational_age_delivery
-# weight at birth: pex_bm_healthv2_inf_001__02 (pounds)
+# weight at birth: pex_bm_healthv2_inf_001__02 (pounds) and pex_bm_healthv2_inf_001__01 (ounces)
 # sex: sed_basic_demographics_sex (0: female, 1: male, 2: unknown)
 # child_ethnicity:sed_basic_demographics_child_ethnicity
 # child_race: sed_basic_demographics_child_race
@@ -67,7 +86,7 @@ df <- demographics %>%
 
 demo_ses_variables <- c(
   "sed_basic_demographics_gestational_age_delivery", # gestational age at birth (weeks)
-  "pex_bm_healthv2_inf_001__02", # weight at birth (pounds)
+  "pex_bm_healthv2_inf_001__02", # weight at birth (pounds + ounces / 16)
   "sed_basic_demographics_sex", # sex (0: female, 1: male, 2: unknown)
   "sed_basic_demographics_child_ethnicity", # child ethnicity
   "sed_basic_demographics_child_race", # child race
