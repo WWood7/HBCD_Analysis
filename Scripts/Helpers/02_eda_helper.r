@@ -1,5 +1,20 @@
-create_pce_table1 <- function(data) {
+create_pce_table1 <- function(data, group_var, definition_name) {
   set.seed(20260821)
+
+  treatment_variables <- c("prenatal_cannabis", "prenatal_cannabis_tox")
+  if (length(group_var) != 1L || !group_var %in% treatment_variables) {
+    stop(
+      "group_var must be either prenatal_cannabis or prenatal_cannabis_tox."
+    )
+  }
+  if (length(definition_name) != 1L || is.na(definition_name)) {
+    stop("definition_name must be one non-missing value.")
+  }
+  missing_variables <- setdiff(treatment_variables, names(data))
+  if (length(missing_variables) > 0L) {
+    stop("Missing columns: ", paste(missing_variables, collapse = ", "))
+  }
+  other_treatment_var <- setdiff(treatment_variables, group_var)
 
   binary_variables <- c(
     "prenatal_nicotine",
@@ -8,11 +23,11 @@ create_pce_table1 <- function(data) {
   )
 
   table_data <- data %>%
-    filter(prenatal_cannabis %in% c(0, 1)) %>%
-    select(-any_of(c("participant_id", "site"))) %>%
+    filter(.data[[group_var]] %in% c(0, 1)) %>%
+    select(-any_of(c("participant_id", "site", other_treatment_var))) %>%
     mutate(
-      prenatal_cannabis = factor(
-        prenatal_cannabis,
+      "{group_var}" := factor(
+        .data[[group_var]],
         levels = c(0, 1),
         labels = c("PCE = 0", "PCE = 1")
       ),
@@ -24,7 +39,7 @@ create_pce_table1 <- function(data) {
 
   table_data %>%
     gtsummary::tbl_summary(
-      by = prenatal_cannabis,
+      by = all_of(group_var),
       statistic = list(
         gtsummary::all_continuous() ~ "{mean} ({sd})",
         gtsummary::all_categorical() ~ "{n} ({p}%)"
@@ -48,7 +63,12 @@ create_pce_table1 <- function(data) {
         prenatal_alcohol ~ "Prenatal alcohol exposure",
         mother_race ~ "Mother race",
         mother_ethnicity ~ "Mother ethnicity",
-        mother_age_delivery ~ "Mother age at delivery"
+        mother_age_delivery ~ "Mother age at delivery",
+        food_insecurity ~ "Food insecurity",
+        mother_employment ~ "Mother employment",
+        hypertension ~ "Hypertension",
+        preeclampsia ~ "Pre-eclampsia",
+        oligohydramnios ~ "Oligohydramnios"
       )
     ) %>%
     gtsummary::add_overall(
@@ -70,7 +90,12 @@ create_pce_table1 <- function(data) {
           mother_ethnicity,
           prenatal_nicotine,
           prenatal_opioid,
-          prenatal_alcohol
+          prenatal_alcohol,
+          hypertension,
+          preeclampsia,
+          oligohydramnios,
+          mother_employment,
+          food_insecurity
         ) ~ list(workspace = 2e6),
         c(child_race, mother_race) ~ list(simulate.p.value = TRUE, B = 100000)
       )
@@ -81,7 +106,11 @@ create_pce_table1 <- function(data) {
       p.value = "**p-value**"
     ) %>%
     gtsummary::modify_caption(
-      "**Table 1. Participant characteristics by prenatal cannabis exposure**"
+      paste0(
+        "**Table 1. Participant characteristics by ",
+        gsub("_", " ", definition_name),
+        "**"
+      )
     ) %>%
     gtsummary::modify_footnote(
       p.value = "ANOVA for continuous variables; Fisher's exact test for categorical variables (Monte Carlo simulation for race). Bold indicates p < 0.05."

@@ -28,21 +28,21 @@ m_vars <- "gestational_age"
 delta_y_var <- "birth_weight_observed"
 id_vars <- "participant_id"
 treatment_definitions <- c(
-  self_report = "prenatal_cannabis",
-  toxicology = "prenatal_cannabis_tox"
+  tox_and_report = "prenatal_cannabis",
+  tox_only = "prenatal_cannabis_tox"
 )
 
 
-x_vars <- c(
-  "prenatal_nicotine", "prenatal_alcohol", "mother_race", "mother_ethnicity", "mother_education",
-  "household_income", "site", "mother_age_delivery", "food_insecurity",
-  "mother_employment"
-)
 # x_vars <- c(
-#   "prenatal_nicotine_freq", "prenatal_alcohol_freq", "mother_race", "mother_ethnicity", "mother_education",
-#   "household_income", "site", "mother_age_delivery", "work_during_pregnancy", "food_insecurity",
-#   "mother_employment", "hypertension", "preeclampsia", "oligohydramnios"
+#   "prenatal_nicotine", "prenatal_alcohol", "mother_race", "mother_ethnicity", "mother_education",
+#   "household_income", "site", "mother_age_delivery", "food_insecurity",
+#   "mother_employment", "hypertension", "pre_eclampsia", "oligohydramnios"
 # )
+x_vars <- c(
+  "prenatal_nicotine_freq", "prenatal_alcohol_freq", "mother_race", "mother_ethnicity", "mother_education",
+  "household_income", "site", "mother_age_delivery", "food_insecurity",
+  "mother_employment", "hypertension", "preeclampsia", "oligohydramnios"
+)
 
 # Outcome-observation indicator: 1 when birth weight is recorded, 0 otherwise.
 df_preprocessed[[delta_y_var]] <- as.integer(
