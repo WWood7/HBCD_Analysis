@@ -68,7 +68,9 @@ create_pce_table1 <- function(data, group_var, definition_name) {
         mother_employment ~ "Mother employment",
         hypertension ~ "Hypertension",
         preeclampsia ~ "Pre-eclampsia",
-        oligohydramnios ~ "Oligohydramnios"
+        oligohydramnios ~ "Oligohydramnios",
+        cerebral_wm_vol ~ "Cerebral white matter volume",
+        cortical_gm_vol ~ "Cortical gray matter volume"
       )
     ) %>%
     gtsummary::add_overall(
