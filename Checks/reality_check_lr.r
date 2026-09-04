@@ -7,9 +7,17 @@ suppressPackageStartupMessages({
   library(gt)
 })
 
+if (!requireNamespace("car", quietly = TRUE)) {
+  stop("Package 'car' is required to calculate VIFs.")
+}
+if (!requireNamespace("lmerTest", quietly = TRUE)) {
+  stop("Package 'lmerTest' is required to fit linear mixed models.")
+}
+
 set.seed(20260830)
 
-outcome_var <- "birth_weight_lbs"
+outcome_var <- "birth_weight_grams"
+site_var <- "site"
 treatment_definitions <- c(
   tox_and_report = "prenatal_cannabis",
   tox_only = "prenatal_cannabis_tox"
@@ -17,13 +25,13 @@ treatment_definitions <- c(
 
 prenatal_coexposures <- c(
   "prenatal_nicotine",
-  "prenatal_alcohol"
+  "prenatal_alcohol",
+  "prenatal_opioid"
 )
 baseline_demographics <- c(
   "mother_race",
   "mother_ethnicity",
-  "mother_age_delivery",
-  "site"
+  "mother_age_delivery"
 )
 ses_variables <- c(
   "mother_education",
@@ -38,39 +46,40 @@ pregnancy_conditions <- c(
   "oligohydramnios"
 )
 
-# The order is deliberate. The last two stages may change the estimand
+# Gestational age is entered first to show its immediate impact on the PCE
+# coefficient. Gestational age and pregnancy conditions may change the estimand.
 adjustment_sets <- list(
   "PCE only" = character(0),
-  "+ Prenatal co-exposures" = prenatal_coexposures,
+  "+ Gestational age" = potential_mediator,
+  "+ Prenatal co-exposures" = c(
+    potential_mediator,
+    prenatal_coexposures
+  ),
   "+ Baseline demographics" = c(
+    potential_mediator,
     prenatal_coexposures,
     baseline_demographics
   ),
   "+ SES" = c(
+    potential_mediator,
     prenatal_coexposures,
     baseline_demographics,
     ses_variables
   ),
-  "+ Gestational age" = c(
-    prenatal_coexposures,
-    baseline_demographics,
-    ses_variables,
-    potential_mediator
-  ),
   "+ Pregnancy conditions" = c(
+    potential_mediator,
     prenatal_coexposures,
     baseline_demographics,
     ses_variables,
-    potential_mediator,
     pregnancy_conditions
   )
 )
 adjustment_roles <- c(
-  "PCE only" = "Unadjusted association",
+  "PCE only" = "Site random-intercept model",
+  "+ Gestational age" = "Potential mediator adjustment",
   "+ Prenatal co-exposures" = "Prenatal co-exposure adjustment",
   "+ Baseline demographics" = "Baseline confounder adjustment",
   "+ SES" = "Baseline confounder adjustment",
-  "+ Gestational age" = "Potential mediator adjustment",
   "+ Pregnancy conditions" = "Potential post-exposure adjustment"
 )
 
@@ -85,7 +94,8 @@ factor_variables <- c(
   "mother_employment",
   "hypertension",
   "preeclampsia",
-  "oligohydramnios"
+  "oligohydramnios",
+  "child_sex"
 )
 continuous_predictors <- c(
   prenatal_coexposures,
@@ -100,6 +110,7 @@ preprocessed_data <- read_csv(
 
 required_vars <- unique(c(
   outcome_var,
+  site_var,
   all_adjustment_vars,
   unname(treatment_definitions)
 ))
@@ -126,8 +137,24 @@ extract_treatment_result <- function(
 
   estimate <- coefficient_table[treatment_var, "Estimate"]
   standard_error <- coefficient_table[treatment_var, "Std. Error"]
-  critical_value <- stats::qt(0.975, df = stats::df.residual(model))
-  model_summary <- summary(model)
+  degrees_freedom <- if ("df" %in% colnames(coefficient_table)) {
+    coefficient_table[treatment_var, "df"]
+  } else {
+    Inf
+  }
+  critical_value <- if (is.finite(degrees_freedom)) {
+    stats::qt(0.975, df = degrees_freedom)
+  } else {
+    stats::qnorm(0.975)
+  }
+  p_value_column <- grep(
+    "^Pr\\(",
+    colnames(coefficient_table),
+    value = TRUE
+  )
+  if (length(p_value_column) != 1L) {
+    stop("Unable to identify the mixed-model p-value column.")
+  }
 
   data.frame(
     treatment_definition = treatment_definition,
@@ -139,9 +166,10 @@ extract_treatment_result <- function(
     standard_error = standard_error,
     ci_lower = estimate - critical_value * standard_error,
     ci_upper = estimate + critical_value * standard_error,
-    p_value = coefficient_table[treatment_var, "Pr(>|t|)"],
-    r_squared = model_summary$r.squared,
-    adjusted_r_squared = model_summary$adj.r.squared
+    p_value = coefficient_table[treatment_var, p_value_column],
+    pce_vif = calculate_pce_vif(model, treatment_var),
+    aic = stats::AIC(model),
+    bic = stats::BIC(model)
   )
 }
 
@@ -155,7 +183,19 @@ save_plot <- function(plot, filename, width = 9, height = 6) {
   )
 }
 
-save_lm_diagnostic_panel <- function(model, filename, title) {
+save_lmm_diagnostic_panel <- function(model, filename, title) {
+  fitted_values <- stats::fitted(model)
+  residual_values <- stats::residuals(model)
+  standardized_residuals <- residual_values / stats::sigma(model)
+  leverage <- tryCatch(
+    stats::hatvalues(model),
+    error = function(e) rep(NA_real_, length(residual_values))
+  )
+  cook_distance <- tryCatch(
+    stats::cooks.distance(model),
+    error = function(e) rep(NA_real_, length(residual_values))
+  )
+
   grDevices::png(
     filename = file.path(output_dir, filename),
     width = 2400,
@@ -168,25 +208,75 @@ save_lm_diagnostic_panel <- function(model, filename, title) {
     grDevices::dev.off()
   })
 
-  graphics::par(mfrow = c(2, 3), mar = c(4, 4, 3, 1))
-  graphics::plot(model, which = 1)
-  graphics::plot(model, which = 2)
-  graphics::plot(model, which = 3)
+  graphics::par(
+    mfrow = c(2, 3),
+    mar = c(4, 4, 3, 1),
+    oma = c(0, 0, 2, 0)
+  )
+  graphics::plot(
+    fitted_values,
+    residual_values,
+    xlab = "Fitted values",
+    ylab = "Residuals",
+    main = "Residuals vs fitted"
+  )
+  graphics::abline(h = 0, lty = 2, col = "grey40")
+  graphics::lines(
+    stats::lowess(fitted_values, residual_values),
+    col = "#C8553D",
+    lwd = 2
+  )
+  stats::qqnorm(
+    standardized_residuals,
+    main = "Normal Q-Q",
+    ylab = "Standardized residuals"
+  )
+  stats::qqline(standardized_residuals, col = "#C8553D", lwd = 2)
+  graphics::plot(
+    fitted_values,
+    sqrt(abs(standardized_residuals)),
+    xlab = "Fitted values",
+    ylab = expression(sqrt("|standardized residual|")),
+    main = "Scale-location"
+  )
   graphics::hist(
-    stats::rstandard(model),
+    standardized_residuals,
     breaks = 30,
     main = "Standardized residuals",
     xlab = "Standardized residual"
   )
-  graphics::plot(model, which = 4)
-  graphics::plot(model, which = 5)
-  graphics::mtext(title, outer = TRUE, line = -1, cex = 1.2)
+  if (any(is.finite(cook_distance))) {
+    graphics::plot(
+      cook_distance,
+      type = "h",
+      xlab = "Observation",
+      ylab = "Cook's distance",
+      main = "Cook's distance"
+    )
+  } else {
+    graphics::plot.new()
+    graphics::title("Cook's distance unavailable")
+  }
+  if (any(is.finite(leverage))) {
+    graphics::plot(
+      leverage,
+      standardized_residuals,
+      xlab = "Leverage",
+      ylab = "Standardized residuals",
+      main = "Residuals vs leverage"
+    )
+    graphics::abline(h = 0, lty = 2, col = "grey40")
+  } else {
+    graphics::plot.new()
+    graphics::title("Leverage unavailable")
+  }
+  graphics::mtext(title, outer = TRUE, line = 0, cex = 1.2)
   invisible(NULL)
 }
 
 make_partial_residual_data <- function(model, predictors) {
-  model_data <- model$model
-  model_coefficients <- stats::coef(model)
+  model_data <- stats::model.frame(model)
+  model_coefficients <- lme4::fixef(model)
 
   pieces <- lapply(predictors, function(predictor) {
     if (!predictor %in% names(model_data) ||
@@ -208,26 +298,23 @@ make_partial_residual_data <- function(model, predictors) {
   dplyr::bind_rows(pieces)
 }
 
-calculate_column_vif <- function(design_matrix) {
-  if (ncol(design_matrix) < 2L) return(data.frame())
+calculate_pce_vif <- function(model, treatment_var) {
+  fixed_formula <- lme4::nobars(stats::formula(model))
+  fixed_terms <- attr(stats::terms(fixed_formula), "term.labels")
+  if (length(fixed_terms) == 1L) return(1)
 
-  vif_values <- vapply(seq_len(ncol(design_matrix)), function(column_index) {
-    outcome <- design_matrix[, column_index]
-    other_columns <- design_matrix[, -column_index, drop = FALSE]
-    fit <- stats::lm.fit(
-      x = cbind(`(Intercept)` = 1, other_columns),
-      y = outcome
-    )
-    total_ss <- sum((outcome - mean(outcome))^2)
-    r_squared <- 1 - sum(fit$residuals^2) / total_ss
-    if (!is.finite(r_squared) || r_squared >= 1) Inf else 1 / (1 - r_squared)
-  }, numeric(1))
+  vif_output <- car::vif(model)
+  if (is.matrix(vif_output)) {
+    if (!treatment_var %in% rownames(vif_output)) {
+      stop("Treatment term is missing from the car::vif() output.")
+    }
+    return(unname(vif_output[treatment_var, "GVIF"]))
+  }
 
-  data.frame(
-    design_column = colnames(design_matrix),
-    vif = vif_values
-  ) %>%
-    arrange(desc(vif))
+  if (!treatment_var %in% names(vif_output)) {
+    stop("Treatment term is missing from the car::vif() output.")
+  }
+  unname(vif_output[[treatment_var]])
 }
 
 assess_collinearity <- function(model, continuous_vars, treatment_definition) {
@@ -249,7 +336,7 @@ assess_collinearity <- function(model, continuous_vars, treatment_definition) {
     error = function(e) Inf
   )
 
-  model_data <- model$model
+  model_data <- stats::model.frame(model)
   available_continuous <- intersect(continuous_vars, names(model_data))
   max_continuous_correlation <- NA_real_
   if (length(available_continuous) >= 2L) {
@@ -263,34 +350,19 @@ assess_collinearity <- function(model, continuous_vars, treatment_definition) {
     }
   }
 
-  collinearity_warning <- is.infinite(condition_number) ||
-    condition_number >= 30 ||
-    (
-      is.finite(max_continuous_correlation) &&
-      max_continuous_correlation >= 0.80
-    )
-
   summary_row <- data.frame(
     treatment_definition = treatment_definition,
     condition_number = condition_number,
-    maximum_continuous_correlation = max_continuous_correlation,
-    collinearity_warning = collinearity_warning
+    maximum_continuous_correlation = max_continuous_correlation
   )
 
-  vif_results <- data.frame()
-  if (collinearity_warning) {
-    vif_results <- calculate_column_vif(design_matrix) %>%
-      mutate(treatment_definition = treatment_definition, .before = 1)
-  }
-
-  list(summary = summary_row, vif = vif_results)
+  summary_row
 }
 
 sample_summary_list <- list()
 raw_difference_list <- list()
 model_result_list <- list()
 collinearity_summary_list <- list()
-vif_result_list <- list()
 linear_models <- list()
 
 for (definition_name in names(treatment_definitions)) {
@@ -439,6 +511,7 @@ for (definition_name in names(treatment_definitions)) {
   complete_case_vars <- unique(c(
     outcome_var,
     treatment_var,
+    site_var,
     all_adjustment_vars
   ))
   analysis_data <- eligible_data %>%
@@ -454,6 +527,9 @@ for (definition_name in names(treatment_definitions)) {
       treatment_var,
       " does not contain both treatment levels after complete-case filtering."
     )
+  }
+  if (dplyr::n_distinct(analysis_data[[site_var]]) < 2L) {
+    stop("At least two sites are required to fit a random intercept.")
   }
 
   constant_adjustment_vars <- all_adjustment_vars[
@@ -479,12 +555,19 @@ for (definition_name in names(treatment_definitions)) {
       adjustment_sets[[model_index]],
       constant_adjustment_vars
     )
-    model <- stats::lm(
-      stats::reformulate(
-        c(treatment_var, model_adjustments),
-        response = outcome_var
-      ),
-      data = analysis_data
+    fixed_effects <- c(treatment_var, model_adjustments)
+    mixed_model_formula <- stats::as.formula(paste0(
+      outcome_var,
+      " ~ ",
+      paste(fixed_effects, collapse = " + "),
+      " + (1 | ",
+      site_var,
+      ")"
+    ))
+    model <- lmerTest::lmer(
+      formula = mixed_model_formula,
+      data = analysis_data,
+      REML = FALSE
     )
     definition_models[[model_name]] <<- model
 
@@ -501,7 +584,7 @@ for (definition_name in names(treatment_definitions)) {
   model_result_list[[definition_name]] <- bind_rows(definition_results)
 
   fully_adjusted_model <- definition_models[[length(definition_models)]]
-  save_lm_diagnostic_panel(
+  save_lmm_diagnostic_panel(
     fully_adjusted_model,
     paste0(definition_name, "_fully_adjusted_diagnostics.png"),
     paste("Fully adjusted model:", definition_name)
@@ -548,20 +631,17 @@ for (definition_name in names(treatment_definitions)) {
     )
   }
 
-  collinearity <- assess_collinearity(
+  collinearity_summary_list[[definition_name]] <- assess_collinearity(
     fully_adjusted_model,
     continuous_predictors,
     definition_name
   )
-  collinearity_summary_list[[definition_name]] <- collinearity$summary
-  vif_result_list[[definition_name]] <- collinearity$vif
 }
 
 sample_missingness_results <- bind_rows(sample_summary_list)
 raw_outcome_results <- bind_rows(raw_difference_list)
 sequential_model_results <- bind_rows(model_result_list)
 collinearity_results <- bind_rows(collinearity_summary_list)
-vif_results <- bind_rows(vif_result_list)
 
 coefficient_plot_data <- sequential_model_results %>%
   mutate(
@@ -587,7 +667,6 @@ coefficient_plot <- ggplot(
   facet_wrap(~ treatment_definition) +
   labs(
     title = "PCE coefficient across sequential adjustment sets",
-    subtitle = "All specifications within a panel use the same complete-case sample",
     x = "Model specification",
     y = "PCE coefficient (lb)"
   ) +
@@ -599,6 +678,35 @@ coefficient_plot <- ggplot(
 save_plot(
   coefficient_plot,
   "pce_coefficient_trajectory.png",
+  width = 12,
+  height = 7
+)
+
+pce_vif_plot <- ggplot(
+  coefficient_plot_data,
+  aes(
+    x = model,
+    y = pce_vif,
+    group = treatment_definition
+  )
+) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "grey45") +
+  geom_line(color = "#264653", linewidth = 0.7) +
+  geom_point(color = "#264653", size = 2.2) +
+  facet_wrap(~ treatment_definition) +
+  labs(
+    title = "PCE VIF across sequential adjustment sets",
+    x = "Model specification",
+    y = "PCE VIF"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1),
+    plot.title.position = "plot"
+  )
+save_plot(
+  pce_vif_plot,
+  "pce_vif_trajectory.png",
   width = 12,
   height = 7
 )
@@ -619,9 +727,13 @@ write_csv(
   collinearity_results,
   file.path(output_dir, "collinearity_summary.csv")
 )
-if (nrow(vif_results) > 0L) {
-  write_csv(vif_results, file.path(output_dir, "vif_results.csv"))
-}
+write_csv(
+  sequential_model_results %>%
+    select(treatment_definition, model, model_order, pce_vif),
+  file.path(output_dir, "pce_vif_by_model.csv")
+)
+old_vif_path <- file.path(output_dir, "vif_results.csv")
+if (file.exists(old_vif_path)) file.remove(old_vif_path)
 
 model_table_data <- sequential_model_results %>%
   arrange(treatment_definition, model_order) %>%
@@ -633,17 +745,20 @@ model_table_data <- sequential_model_results %>%
     `PCE estimate` = sprintf("%.3f", pce_estimate),
     SE = sprintf("%.3f", standard_error),
     `95% CI` = sprintf("[%.3f, %.3f]", ci_lower, ci_upper),
-    p = ifelse(p_value < 0.001, "<0.001", sprintf("%.3f", p_value))
+    p = ifelse(p_value < 0.001, "<0.001", sprintf("%.3f", p_value)),
+    `PCE VIF` = sprintf("%.3f", pce_vif)
   )
 
 model_table <- model_table_data %>%
   gt::gt(groupname_col = "Treatment") %>%
   gt::tab_header(
-    title = "Sequential birthweight regressions"
+    title = "Sequential birthweight linear mixed models"
   ) %>%
   gt::tab_source_note(
     gt::md(
       paste(
+        "All models include a site-level random intercept and are fit by",
+        "maximum likelihood.",
         "Gestational age is a potential mediator; pregnancy conditions may",
         "also be post-exposure. Coefficient changes after these stages should",
         "not be interpreted as ordinary baseline confounding adjustment."
@@ -671,17 +786,13 @@ print(
       standard_error,
       ci_lower,
       ci_upper,
-      p_value
+      p_value,
+      pce_vif
     ),
   n = Inf,
   width = Inf
 )
 message("\n========== Collinearity screen ==========")
 print(as_tibble(collinearity_results), n = Inf, width = Inf)
-if (nrow(vif_results) > 0L) {
-  message("\nVIFs were calculated because the collinearity screen was positive.")
-  print(as_tibble(vif_results), n = Inf, width = Inf)
-} else {
-  message("\nNo clear collinearity warning; VIFs were not calculated.")
-}
+message("\nPCE VIF is reported for every sequential model above.")
 message("\nDiagnostic outputs saved to: ", output_dir)

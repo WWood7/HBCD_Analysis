@@ -9,47 +9,68 @@ suppressPackageStartupMessages({
   library(gt)
 })
 
-# Number of participant-level outer cross-fitting folds.
+# Match the birthweight mediation analysis settings.
 num_outer_folds <- 2L
-flag_missingness <- FALSE
-runtime_preset <- "fast"
+flag_missingness <- TRUE
 set.seed(123)
 
 pipeline_start <- Sys.time()
 message("Pipeline started at: ", format(pipeline_start, "%Y-%m-%d %H:%M:%S"))
 
-# Load the participant-level HBCD analysis table.
 input_path <- file.path(preprocessed_dir, "preprocessed_df.csv")
 df_preprocessed <- readr::read_csv(input_path, show_col_types = FALSE)
 
-# HBCD analysis variables
-y_vars <- "birth_weight_lbs"
-m_vars <- "gestational_age"
-delta_y_var <- "birth_weight_observed"
-id_vars <- "participant_id"
+# Brain mediation analysis variables:
+# PCE -> birthweight -> infant brain volume.
+y_vars <- c(
+  "cerebral_wm_vol",
+  "cortical_gm_vol"
+)
+m_vars <- "birth_weight_grams"
+delta_y_var <- "brain_outcomes_observed"
+brain_qc_var <- "t2w_qc"
+brain_qc_threshold <- 0.5
 treatment_definitions <- c(
   tox_and_report = "prenatal_cannabis",
   tox_only = "prenatal_cannabis_tox"
 )
-
-
-# x_vars <- c(
-#   "prenatal_nicotine", "prenatal_alcohol", "mother_race", "mother_ethnicity", "mother_education",
-#   "household_income", "site", "mother_age_delivery", "food_insecurity",
-#   "mother_employment", "hypertension", "pre_eclampsia", "oligohydramnios"
-# )
 x_vars <- c(
-  "prenatal_nicotine_freq", "prenatal_alcohol_freq", "mother_race", "mother_ethnicity", "mother_education",
-  "household_income", "site", "mother_age_delivery", "food_insecurity",
-  "mother_employment", "hypertension", "preeclampsia", "oligohydramnios", "child_sex"
+  "prenatal_nicotine",
+  "prenatal_alcohol",
+  "prenatal_opioid",
+  "mother_race",
+  "mother_ethnicity",
+  "mother_education",
+  "household_income",
+  "site",
+  "mother_age_delivery",
+  "food_insecurity",
+  "mother_employment",
+  "child_sex",
+  "t2w_age_adjusted_weeks"
 )
 
-# Outcome-observation indicator: 1 when birth weight is recorded, 0 otherwise.
+required_columns <- unique(c(
+  y_vars,
+  m_vars,
+  brain_qc_var,
+  unname(treatment_definitions),
+  x_vars
+))
+missing_columns <- setdiff(required_columns, names(df_preprocessed))
+if (length(missing_columns) > 0L) {
+  stop("Missing columns: ", paste(missing_columns, collapse = ", "))
+}
+
+# A brain outcome is eligible only when T2w QC is available and passes the
+# prespecified threshold. Complete-case preprocessing subsequently requires
+# both requested brain outcomes to be non-missing.
 df_preprocessed[[delta_y_var]] <- as.integer(
-  !is.na(df_preprocessed[[y_vars]])
+  !is.na(df_preprocessed[[brain_qc_var]]) &
+    df_preprocessed[[brain_qc_var]] >= brain_qc_threshold
 )
 
-# Define classification and regression Super Learners.
+# Use the same Super Learner library as the birthweight analysis.
 cls_learners <- list(
   Lrnr_glm$new(),
   Lrnr_ranger$new(),
@@ -65,7 +86,6 @@ reg_learners <- list(
   Lrnr_gbm$new()
 )
 
-
 cls_stack <- do.call(Stack$new, cls_learners)
 reg_stack <- do.call(Stack$new, reg_learners)
 
@@ -77,57 +97,73 @@ reg_lrnr <- Lrnr_sl$new(
   learners = reg_stack,
   metalearner = Lrnr_nnls$new(eval_function = loss_squared_error)
 )
-learners <- list(cls_lrnr = cls_lrnr, reg_lrnr = reg_lrnr)
+learners <- list(
+  cls_lrnr = cls_lrnr,
+  reg_lrnr = reg_lrnr
+)
 
-models_output_dir <- file.path(birthweight_output_dir, "Models")
+brain_output_dir <- file.path(getwd(), "Outputs", "Causal", "Brain")
+models_output_dir <- file.path(brain_output_dir, "Models")
+tables_output_dir <- file.path(brain_output_dir, "Tables")
 dir.create(models_output_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(tables_output_dir, recursive = TRUE, showWarnings = FALSE)
 
-results_list <- lapply(names(treatment_definitions), function(definition_name) {
-  treatment_var <- treatment_definitions[[definition_name]]
-  analysis_data <- df_preprocessed %>%
-    filter(.data[[treatment_var]] %in% c(0, 1))
-  if (!all(c(0, 1) %in% unique(analysis_data[[treatment_var]]))) {
-    stop(treatment_var, " does not contain both 0 and 1 after subsetting.")
+results_list <- lapply(
+  names(treatment_definitions),
+  function(definition_name) {
+    treatment_var <- treatment_definitions[[definition_name]]
+    analysis_data <- df_preprocessed %>%
+      filter(.data[[treatment_var]] %in% c(0, 1))
+
+    if (!all(c(0, 1) %in% unique(analysis_data[[treatment_var]]))) {
+      stop(treatment_var, " does not contain both 0 and 1 after subsetting.")
+    }
+
+    message(
+      "\n========== HBCD brain mediation: ",
+      treatment_var,
+      " 0 vs 1 (N before complete-case filtering = ",
+      nrow(analysis_data),
+      ") =========="
+    )
+
+    treatment_results <- run_mediation_pipeline(
+      df_input = analysis_data,
+      a_var = treatment_var,
+      x_vars = x_vars,
+      m_vars = m_vars,
+      y_vars = y_vars,
+      delta_y_var = delta_y_var,
+      learners = learners,
+      num_outer_folds = num_outer_folds,
+      flag_missingness = flag_missingness
+    ) %>%
+      mutate(treatment_definition = definition_name)
+
+    output_stem <- paste0("brain_", definition_name)
+    saveRDS(
+      treatment_results,
+      file = file.path(models_output_dir, paste0(output_stem, ".rds"))
+    )
+    readr::write_csv(
+      treatment_results,
+      file = file.path(models_output_dir, paste0(output_stem, ".csv"))
+    )
+    treatment_results
   }
-  message(
-    "\n========== HBCD birthweight mediation: ",
-    treatment_var,
-    " 0 vs 1 (N = ",
-    nrow(analysis_data),
-    ") =========="
-  )
-
-  treatment_results <- run_mediation_pipeline(
-    df_input = analysis_data,
-    a_var = treatment_var,
-    x_vars = x_vars,
-    m_vars = m_vars,
-    y_vars = y_vars,
-    delta_y_var = delta_y_var,
-    learners = learners,
-    num_outer_folds = num_outer_folds,
-    flag_missingness = flag_missingness
-  ) %>%
-    mutate(treatment_definition = definition_name)
-
-  output_stem <- paste0(
-    "birthweight_",
-    definition_name
-  )
-  saveRDS(
-    treatment_results,
-    file = file.path(models_output_dir, paste0(output_stem, ".rds"))
-  )
-  readr::write_csv(
-    treatment_results,
-    file = file.path(models_output_dir, paste0(output_stem, ".csv"))
-  )
-  treatment_results
-})
+)
 names(results_list) <- names(treatment_definitions)
 results <- dplyr::bind_rows(results_list)
 
-# Create one HTML table for each treatment definition.
+saveRDS(
+  results,
+  file = file.path(models_output_dir, "brain_combined.rds")
+)
+readr::write_csv(
+  results,
+  file = file.path(models_output_dir, "brain_combined.csv")
+)
+
 safe_se <- function(variance) {
   ifelse(is.finite(variance) & variance >= 0, sqrt(variance), NA_real_)
 }
@@ -163,13 +199,13 @@ make_table_data <- function(treatment_results) {
         "Natural direct effect (NDE)",
         "Natural indirect effect (NIE)"
       ),
-      estimate,
-      se,
+      estimate = estimate,
+      se = se,
       ci_lower = estimate - z_critical * se,
       ci_upper = estimate + z_critical * se,
       p_value = 2 * stats::pnorm(-abs(estimate / se)),
-      standardized_estimate,
-      standardized_se,
+      standardized_estimate = standardized_estimate,
+      standardized_se = standardized_se,
       standardized_ci_lower =
         standardized_estimate - z_critical * standardized_se,
       standardized_ci_upper =
@@ -188,9 +224,6 @@ format_p_value <- function(x) {
   )
 }
 
-tables_output_dir <- file.path(birthweight_output_dir, "Tables")
-dir.create(tables_output_dir, recursive = TRUE, showWarnings = FALSE)
-
 for (definition_name in names(results_list)) {
   treatment_results <- results_list[[definition_name]]
   table_data <- make_table_data(treatment_results)
@@ -198,14 +231,14 @@ for (definition_name in names(results_list)) {
   effect_table <- table_data %>%
     gt::gt(rowname_col = "effect", groupname_col = "outcome") %>%
     gt::tab_header(
-      title = gt::md("**HBCD Birthweight Mediation Effects**"),
+      title = gt::md("**HBCD Brain-Volume Mediation Effects**"),
       subtitle = paste0(
         treatment_definitions[[definition_name]],
-        ": 1 versus 0"
+        ": 1 versus 0; mediator = birthweight"
       )
     ) %>%
     gt::tab_spanner(
-      label = "Estimated effect (lb)",
+      label = "Estimated effect (volume units)",
       columns = c(estimate, se, ci_lower, ci_upper, p_value)
     ) %>%
     gt::tab_spanner(
@@ -251,11 +284,9 @@ for (definition_name in names(results_list)) {
       source_note = paste0(
         "Two-sided Wald tests and 95% confidence intervals; N = ",
         treatment_results$n_analysis[1],
-        " (observed birth weight = ",
-        treatment_results$n_outcome_observed[1],
-        ", missing birth weight = ",
-        treatment_results$n_outcome_missing[1],
-        ")."
+        ". Complete-case analysis requires T2w QC >= ",
+        brain_qc_threshold,
+        ", birthweight, and both brain outcomes to be observed."
       )
     )
 
@@ -263,20 +294,23 @@ for (definition_name in names(results_list)) {
     effect_table,
     filename = file.path(
       tables_output_dir,
-      paste0("birthweight_", definition_name, "_effects.html")
+      paste0("brain_", definition_name, "_effects.html")
     )
   )
 }
 
-
 pipeline_end <- Sys.time()
 message(
-  "\nSaved separate treatment results and combined results to ",
+  "\nSaved separate and combined treatment results to ",
   models_output_dir,
   "\nSaved HTML effect tables to ",
   tables_output_dir,
-  "\nPipeline finished at: ", format(pipeline_end, "%Y-%m-%d %H:%M:%S"),
+  "\nPipeline finished at: ",
+  format(pipeline_end, "%Y-%m-%d %H:%M:%S"),
   " | Total runtime: ",
-  round(as.numeric(difftime(pipeline_end, pipeline_start, units = "mins")), 2),
+  round(
+    as.numeric(difftime(pipeline_end, pipeline_start, units = "mins")),
+    2
+  ),
   " mins"
 )

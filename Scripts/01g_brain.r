@@ -7,7 +7,7 @@ brain <- read.csv(
   check.names = FALSE
 )
 
-brain_volume_variables <- c(
+brain_variables <- c(
   left_cerebral_wm =
     "img_bibsnet_space-T2w_desc-aseg_volumes_Left-Cerebral-White-Matter",
   right_cerebral_wm =
@@ -15,51 +15,63 @@ brain_volume_variables <- c(
   left_cortical_gm =
     "img_bibsnet_space-T2w_desc-aseg_volumes_Left-Cerebral-Cortex",
   right_cortical_gm =
-    "img_bibsnet_space-T2w_desc-aseg_volumes_Right-Cerebral-Cortex"
+    "img_bibsnet_space-T2w_desc-aseg_volumes_Right-Cerebral-Cortex",
+  t2w_qc = "img_brainswipes_xcpd_hash-0f306a2f+0ef9c88a_T2w_summary_QC",
+  t2w_age_adjusted = "img_bibsnet_space-T2w_desc-aseg_volumes_adjusted_age"
 )
 
-missing_variables <- setdiff(
-  c("participant_id", unname(brain_volume_variables)),
-  names(brain)
-)
-if (length(missing_variables) > 0L) {
-  stop("Missing columns: ", paste(missing_variables, collapse = ", "))
-}
 
-first_non_missing <- function(x) {
-  observed <- x[!is.na(x)]
-  if (length(observed) == 0L) NA_real_ else observed[[1]]
-}
+brain_v02 <- brain %>%
+  filter(session_id == "ses-V02")
 
-brain_components <- brain %>%
+brain_volume_table <- brain_v02 %>%
   transmute(
     participant_id,
     left_cerebral_wm = suppressWarnings(as.numeric(as.character(
-      .data[[brain_volume_variables[["left_cerebral_wm"]]]]
+      .data[[brain_variables[["left_cerebral_wm"]]]]
     ))),
     right_cerebral_wm = suppressWarnings(as.numeric(as.character(
-      .data[[brain_volume_variables[["right_cerebral_wm"]]]]
+      .data[[brain_variables[["right_cerebral_wm"]]]]
     ))),
     left_cortical_gm = suppressWarnings(as.numeric(as.character(
-      .data[[brain_volume_variables[["left_cortical_gm"]]]]
+      .data[[brain_variables[["left_cortical_gm"]]]]
     ))),
     right_cortical_gm = suppressWarnings(as.numeric(as.character(
-      .data[[brain_volume_variables[["right_cortical_gm"]]]]
+      .data[[brain_variables[["right_cortical_gm"]]]]
+    ))),
+    t2w_age_adjusted_weeks = suppressWarnings(as.numeric(as.character(
+      .data[[brain_variables[["t2w_age_adjusted"]]]]
     )))
   ) %>%
   mutate(
     cerebral_wm_vol = left_cerebral_wm + right_cerebral_wm,
     cortical_gm_vol = left_cortical_gm + right_cortical_gm
-  )
+  ) %>%
+  select(participant_id, cerebral_wm_vol, cortical_gm_vol, t2w_age_adjusted_weeks) %>%
+  filter(!is.na(cerebral_wm_vol) | !is.na(cortical_gm_vol) | !is.na(t2w_age_adjusted_weeks)) %>%
+  distinct()
 
-# Keep one non-missing T2-weighted volume per participant.
-brain_table <- brain_components %>%
-  group_by(participant_id) %>%
-  summarise(
-    cerebral_wm_vol = first_non_missing(cerebral_wm_vol),
-    cortical_gm_vol = first_non_missing(cortical_gm_vol),
-    .groups = "drop"
-  )
+brain_qc_table <- brain_v02 %>%
+  transmute(
+    participant_id,
+    t2w_qc = suppressWarnings(as.numeric(as.character(
+      .data[[brain_variables[["t2w_qc"]]]]
+    )))
+  ) %>%
+  filter(!is.na(t2w_qc)) %>%
+  distinct()
+
+if (anyDuplicated(brain_volume_table$participant_id)) {
+  stop("Multiple distinct V02 brain-volume records found for a participant.")
+}
+if (anyDuplicated(brain_qc_table$participant_id)) {
+  stop("Multiple distinct V02 T2w QC records found for a participant.")
+}
+
+brain_table <- brain_v02 %>%
+  distinct(participant_id) %>%
+  left_join(brain_volume_table, by = "participant_id") %>%
+  left_join(brain_qc_table, by = "participant_id")
 
 write.csv(
   brain_table,

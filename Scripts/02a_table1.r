@@ -36,3 +36,33 @@ table1_results <- lapply(names(treatment_definitions), function(definition_name)
   table1
 })
 names(table1_results) <- names(treatment_definitions)
+
+# Create corresponding tables restricted to participants with complete data
+# for every variable displayed in that treatment-specific table.
+table1_complete_case_results <- lapply(
+  names(treatment_definitions),
+  function(definition_name) {
+    group_var <- treatment_definitions[[definition_name]]
+    table1 <- create_pce_table1(
+      preprocessed_df,
+      group_var = group_var,
+      definition_name = definition_name,
+      complete_case = TRUE
+    )
+
+    gt::gtsave(
+      gtsummary::as_gt(table1),
+      filename = file.path(
+        eda_output_dir,
+        paste0(
+          "table1_pce_",
+          definition_name,
+          "_complete_case.html"
+        )
+      )
+    )
+
+    table1
+  }
+)
+names(table1_complete_case_results) <- names(treatment_definitions)

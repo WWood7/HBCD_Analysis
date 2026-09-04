@@ -1,4 +1,9 @@
-create_pce_table1 <- function(data, group_var, definition_name) {
+create_pce_table1 <- function(
+    data,
+    group_var,
+    definition_name,
+    complete_case = FALSE
+) {
   set.seed(20260821)
 
   treatment_variables <- c("prenatal_cannabis", "prenatal_cannabis_tox")
@@ -9,6 +14,10 @@ create_pce_table1 <- function(data, group_var, definition_name) {
   }
   if (length(definition_name) != 1L || is.na(definition_name)) {
     stop("definition_name must be one non-missing value.")
+  }
+  if (length(complete_case) != 1L || is.na(complete_case) ||
+      !is.logical(complete_case)) {
+    stop("complete_case must be TRUE or FALSE.")
   }
   missing_variables <- setdiff(treatment_variables, names(data))
   if (length(missing_variables) > 0L) {
@@ -24,7 +33,14 @@ create_pce_table1 <- function(data, group_var, definition_name) {
 
   table_data <- data %>%
     filter(.data[[group_var]] %in% c(0, 1)) %>%
-    select(-any_of(c("participant_id", "site", other_treatment_var))) %>%
+    select(-any_of(c("participant_id", "site", other_treatment_var)))
+
+  if (complete_case) {
+    table_data <- table_data %>%
+      filter(complete.cases(pick(everything())))
+  }
+
+  table_data <- table_data %>%
     mutate(
       "{group_var}" := factor(
         .data[[group_var]],
@@ -70,7 +86,8 @@ create_pce_table1 <- function(data, group_var, definition_name) {
         preeclampsia ~ "Pre-eclampsia",
         oligohydramnios ~ "Oligohydramnios",
         cerebral_wm_vol ~ "Cerebral white matter volume",
-        cortical_gm_vol ~ "Cortical gray matter volume"
+        cortical_gm_vol ~ "Cortical gray matter volume",
+        t2w_qc ~ "T2w MRI quality control"
       )
     ) %>%
     gtsummary::add_overall(
@@ -111,6 +128,7 @@ create_pce_table1 <- function(data, group_var, definition_name) {
       paste0(
         "**Table 1. Participant characteristics by ",
         gsub("_", " ", definition_name),
+        if (complete_case) " (complete-case sample)" else "",
         "**"
       )
     ) %>%

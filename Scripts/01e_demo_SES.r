@@ -134,4 +134,8 @@ demo_ses_table <- df %>%
   demo_ses_table <- demo_ses_table %>%
   apply_variable_spec(demo_ses_spec)
 
+  # add a birth_weight_grams variable
+  demo_ses_table <- demo_ses_table %>%
+    mutate(birth_weight_grams = birth_weight_lbs * 453.592)
+
   write.csv(demo_ses_table, file.path(preprocessed_dir, "demo_ses_table.csv"), row.names = FALSE)
